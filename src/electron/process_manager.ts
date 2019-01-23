@@ -25,7 +25,7 @@ import * as util from '../www/app/util';
 import * as errors from '../www/model/errors';
 
 import {SerializableConnection} from './connection_store';
-import * as routing from './routing_service';
+import * as routing from './routing';
 import {pathToEmbeddedBinary} from './util';
 
 // Errors raised by spawn contain these extra fields, at least on Windows.
