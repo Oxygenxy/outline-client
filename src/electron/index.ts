@@ -293,16 +293,27 @@ function startVpn(config: cordova.plugins.outline.ServerConfig, id: string, isAu
 
   // connect to service, via unix pipe
   routing.RoutingService
-      .connect(() => {
-        // TODO: reconnect?
-        // TODO: when does the service close the pipe? is it different on windows vs. linux?
-        // TODO: should we just abort when the pipe closes?
-        console.log('pipe closed!');
-      })
+      .create(
+          () => {
+            // TODO: reconnect?
+            // TODO: when does the service close the pipe? is it different on windows vs. linux?
+            // TODO: should we just abort when the pipe closes?
+            console.log('pipe to service closed!');
+          },
+          (type) => {
+            console.log(`service message: ${type}`);
+            // TODO: start shadowsocks, etc. when this happens?
+            if (type === routing.RoutingServiceAction.CONFIGURE_ROUTING) {
+              console.log(`connected! disconnecting...`);
+              // TODO: uh damn
+              // r.stop();
+            }
+          })
       .then(
           (r) => {
             // TODO: how to keep a reference to this for when/if disconnect is called?
-            console.log('connected!');
+            console.log('connected to service');
+            r.start();
           },
           (e) => {
             // TODO: start/install the service?
@@ -334,6 +345,7 @@ function sendConnectionStatus(status: ConnectionStatus, connectionId: string) {
   }
 }
 
+// TODO: does this have to be a promise? could we do events instead?
 promiseIpc.on(
     'start-proxying', (args: {config: cordova.plugins.outline.ServerConfig, id: string}) => {
       startVpn(args.config, args.id);
