@@ -26,6 +26,7 @@ import * as errors from '../www/model/errors';
 
 import {ConnectionStore, SerializableConnection} from './connection_store';
 import * as process_manager from './process_manager';
+import * as routing from './routing';
 
 // Used for the auto-connect feature. There will be a connection in store
 // if the user was connected at shutdown.
@@ -285,33 +286,28 @@ promiseIpc.on('is-reachable', (config: cordova.plugins.outline.ServerConfig) => 
       });
 });
 
+// used by both "regular", user-initiated connect and auto-connect (on startup/boot).
 function startVpn(config: cordova.plugins.outline.ServerConfig, id: string, isAutoConnect = false) {
-  return process_manager.teardownVpn()
-      .catch((e) => {
-        console.error(`error tearing down the VPN`, e);
+  // don't log connection details (PII)
+  console.log('frontend asked us to connect!');
+
+  // connect to service, via unix pipe
+  routing.RoutingService
+      .connect(() => {
+        // TODO: reconnect?
+        // TODO: when does the service close the pipe? is it different on windows vs. linux?
+        // TODO: should we just abort when the pipe closes?
+        console.log('pipe closed!');
       })
-      .then(() => {
-        return process_manager
-            .startVpn(
-                config,
-                (status: ConnectionStatus) => {
-                  createTrayIcon(status);
-                  sendConnectionStatus(status, id);
-                  if (status === ConnectionStatus.DISCONNECTED) {
-                    connectionStore.clear().catch((err) => {
-                      console.error('Failed to clear connection store.');
-                    });
-                  }
-                },
-                isAutoConnect)
-            .then((newConfig) => {
-              connectionStore.save({config: newConfig, id}).catch((err) => {
-                console.error('Failed to store connection.');
-              });
-              sendConnectionStatus(ConnectionStatus.CONNECTED, id);
-              createTrayIcon(ConnectionStatus.CONNECTED);
-            });
-      });
+      .then(
+          (r) => {
+            // TODO: how to keep a reference to this for when/if disconnect is called?
+            console.log('connected!');
+          },
+          (e) => {
+            // TODO: start/install the service?
+            console.error('could not connect to pipe');
+          });
 }
 
 function sendConnectionStatus(status: ConnectionStatus, connectionId: string) {
@@ -340,10 +336,8 @@ function sendConnectionStatus(status: ConnectionStatus, connectionId: string) {
 
 promiseIpc.on(
     'start-proxying', (args: {config: cordova.plugins.outline.ServerConfig, id: string}) => {
-      return startVpn(args.config, args.id).catch((e) => {
-        console.error(`could not connect: ${e.name} (${e.message})`);
-        throw errors.toErrorCode(e);
-      });
+      startVpn(args.config, args.id);
+      throw errors.ErrorCode.SHADOWSOCKS_START_FAILURE;
     });
 
 promiseIpc.on('stop-proxying', () => {
