@@ -292,6 +292,10 @@ function startVpn(config: cordova.plugins.outline.ServerConfig, id: string, isAu
   console.log('frontend asked us to connect!');
 
   // connect to service, via unix pipe
+  // NOTE: on windows, nobody else can connect to the pipe until the client
+  //       disconnects from the pipe - NOT EVEN THE CONNECTED CLIENT
+  // TODO: does this mean if the client crashes while you're connected, the new
+  //       instance of the client CANNOT connect to the pipe?
   routing.RoutingService
       .connect(() => {
         // TODO: reconnect?
