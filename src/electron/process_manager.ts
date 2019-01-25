@@ -294,6 +294,7 @@ function startLocalShadowsocksProxy(
       } else {
         console.info(`ss-local exited with code ${code}`);
       }
+      onDisconnected();
     });
   });
 }
