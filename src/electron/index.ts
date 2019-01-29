@@ -300,6 +300,12 @@ function sendConnectionStatus(status: ConnectionStatus, connectionId: string) {
   }
 }
 
+const TUN2SOCKS_TAP_DEVICE_NAME = isLinux ? 'outline-tun0' : 'outline-tap0';
+const TUN2SOCKS_TAP_DEVICE_IP = '10.0.85.2';
+const TUN2SOCKS_VIRTUAL_ROUTER_IP = '10.0.85.1';
+const TUN2SOCKS_TAP_DEVICE_NETWORK = '10.0.85.0';
+const TUN2SOCKS_VIRTUAL_ROUTER_NETMASK = '255.255.255.0';
+
 const PROXY_IP = '127.0.0.1';
 const SS_LOCAL_PORT = 1081;
 
@@ -307,6 +313,8 @@ class ProcessMediator {
   private r = new routing.RoutingService();
   private p =
       new process_manager.SingletonProcess(pathToEmbeddedBinary('shadowsocks-libev', 'ss-local'));
+  private t =
+      new process_manager.SingletonProcess(pathToEmbeddedBinary('badvpn', 'badvpn-tun2socks'));
 
   // ugh horrible
   private currentId: string|undefined;
@@ -314,9 +322,36 @@ class ProcessMediator {
   async start(config: cordova.plugins.outline.ServerConfig, id: string) {
     console.log('mediator: starting processes...');
     this.currentId = id;
-    await this.r.start();
+    await this.r.start(config.host || '');
     this.p.setStatusListener(this.failure.bind(this));
+    this.t.setStatusListener(this.failure.bind(this));
+    this.startTun2socks();
     this.startProxy(config);
+  }
+
+  private startTun2socks() {
+    // ./badvpn-tun2socks.exe \
+    //   --tundev "tap0901:outline-tap0:10.0.85.2:10.0.85.0:255.255.255.0" \
+    //   --netif-ipaddr 10.0.85.1 --netif-netmask 255.255.255.0 \
+    //   --socks-server-addr 127.0.0.1:1081 \
+    //   --socks5-udp --udp-relay-addr 127.0.0.1:1081 \
+    //   --transparent-dns
+    const args: string[] = [];
+    args.push(
+        '--tundev',
+        isLinux ? TUN2SOCKS_TAP_DEVICE_NAME :
+                  `tap0901:${TUN2SOCKS_TAP_DEVICE_NAME}:${TUN2SOCKS_TAP_DEVICE_IP}:${
+                      TUN2SOCKS_TAP_DEVICE_NETWORK}:${TUN2SOCKS_VIRTUAL_ROUTER_NETMASK}`);
+    args.push('--netif-ipaddr', TUN2SOCKS_VIRTUAL_ROUTER_IP);
+    args.push('--netif-netmask', TUN2SOCKS_VIRTUAL_ROUTER_NETMASK);
+    args.push('--socks-server-addr', `${PROXY_IP}:${SS_LOCAL_PORT}`);
+    args.push('--loglevel', 'error');
+    args.push('--transparent-dns');
+    // TODO: make conditional
+    args.push('--socks5-udp');
+    args.push('--udp-relay-addr', `${PROXY_IP}:${SS_LOCAL_PORT}`);
+
+    this.t.start(args);
   }
 
   private startProxy(config: cordova.plugins.outline.ServerConfig) {
@@ -340,8 +375,10 @@ class ProcessMediator {
   async stop() {
     console.log('mediator: stopping processes...');
     this.p.setStatusListener(undefined);
+    this.t.setStatusListener(undefined);
     await this.r.stop();
     this.p.stop();
+    this.t.stop();
 
     if (this.currentId) {
       sendConnectionStatus(ConnectionStatus.DISCONNECTED, this.currentId);

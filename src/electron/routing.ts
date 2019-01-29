@@ -15,8 +15,6 @@
 import * as net from 'net';
 import * as os from 'os';
 
-const isLinux = os.platform() === 'linux';
-
 interface RoutingServiceRequest {
   action: string;
   parameters: {[parameter: string]: string|boolean};
@@ -112,11 +110,11 @@ export class RoutingService {
   private fulfillStop?: () => void;
 
   // ALWAYS USES A BRAND NEW PIPE
-  async start() {
+  async start(host: string) {
     const pipe = await this.getConnection();
     pipe.write(JSON.stringify({
       action: RoutingServiceAction.CONFIGURE_ROUTING,
-      parameters: {'proxyIp': '1.1.1.1', 'routerIp': '10.0.85.1', 'isAutoConnect': false}
+      parameters: {'proxyIp': host, 'routerIp': '10.0.85.1', 'isAutoConnect': false}
     }));
     return new Promise<void>((F) => {
       this.fulfillStart = F;
