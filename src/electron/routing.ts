@@ -46,81 +46,89 @@ const SERVICE_NAME =
     os.platform() === 'win32' ? '\\\\.\\pipe\\OutlineServicePipe' : '/var/run/outline_controller';
 
 export class RoutingService {
-  static create(onClose: () => void, onMessage: (type: RoutingServiceAction) => void):
-      Promise<RoutingService> {
-    return new Promise((F, R) => {
-      // TODO: timeouts? how long does the service typically take to restart?
-      const conn = net.createConnection(SERVICE_NAME, () => {
-        F(new RoutingService(conn, onClose, onMessage));
+  private pipe?: net.Socket;
+
+  private statusListener?: () => void;
+
+  setStatusListener(listener: () => void): void {
+    this.statusListener = listener;
+  }
+
+  private async getConnection(): Promise<net.Socket> {
+    if (this.pipe) {
+      console.log('already connected to pipe');
+      return this.pipe;
+    }
+
+    return new Promise<net.Socket>((F, R) => {
+      console.log('connecting to pipe...');
+
+      // TODO: timeout? how long does the service typically take to restart?
+      const pipe = net.createConnection(SERVICE_NAME, () => {
+        console.log('connected to pipe!');
+        this.pipe = pipe;
+        F(pipe);
       });
+
       // is sufficient to detect failure (no need to listen for end, etc.)
-      conn.once('error', () => {
-        R(new Error('could not connect'));
+      pipe.once('error', () => {
+        // console.error('pipe error');
+        R(new Error('could not connect to pipe'));
+      });
+
+      // NOTE: close is called after error
+      pipe.once('close', () => {
+        console.log('pipe closed');
+        if (this.pipe) {
+          this.pipe.removeAllListeners();
+        }
+        this.pipe = undefined;
+        if (this.statusListener) {
+          this.statusListener();
+        }
+      });
+
+      pipe.on('data', (data) => {
+        console.log(`received message from pipe: ${data.toString().trim()}`);
+        const res: RoutingServiceResponse = JSON.parse(data.toString());
+        switch (res.action) {
+          case RoutingServiceAction.CONFIGURE_ROUTING:
+            if (this.fulfillStart) {
+              this.fulfillStart();
+            }
+            break;
+          case RoutingServiceAction.RESET_ROUTING:
+            if (this.fulfillStop) {
+              this.fulfillStop();
+            }
+            pipe.end();
+            break;
+        }
       });
     });
   }
 
-  private tunDeviceName = 'yoyoyo';
+  private fulfillStart?: () => void;
+  private fulfillStop?: () => void;
 
-  private constructor(
-      private conn: net.Socket, private onClose: () => void,
-      onMessage: (type: RoutingServiceAction) => void) {
-    // once this happens, all further calls to this RoutingService instance will fail
-    // NOTE: close is called after error
-    conn.once('close', () => {
-      this.conn.removeAllListeners();
-      this.onClose();
-    });
-
-    // TODO: is it ever split over multiple packets?
-    this.conn.on('data', (data) => {
-      if (!data) {
-        // TODO: huh?
-        return;
-      }
-
-      console.log(`data from pipe: ${data}`);
-      // TODO: check type
-      const res: RoutingServiceResponse = JSON.parse(data.toString());
-
-      onMessage(res.action);
-
-      // switch (res.action) {
-      //   // case RoutingServiceAction.GET_DEVICE_NAME:
-      //   //   // TODO: OMFG untyped fields
-      //   //   this.tunDeviceName = (res as any)['returnValue'];
-      //   //   this.doit();
-      //   //   break;
-      //   case RoutingServiceAction.CONFIGURE_ROUTING:
-      //   onMessage();
-      //     break;
-      //   case RoutingServiceAction.RESET_ROUTING:
-      //     break;
-      //   default:
-      //     // TODO: uh
-      // }
-    });
-  }
-
-  start(): void {
-    console.log(`asking service to configure routing: ${this.tunDeviceName}`);
-    this.conn.write(JSON.stringify({
-      // action: RoutingServiceAction.CONFIGURE_ROUTING,
-      action: RoutingServiceAction.RESET_ROUTING,
+  // ALWAYS USES A BRAND NEW PIPE
+  async start() {
+    const pipe = await this.getConnection();
+    pipe.write(JSON.stringify({
+      action: RoutingServiceAction.CONFIGURE_ROUTING,
       parameters: {'proxyIp': '1.1.1.1', 'routerIp': '10.0.85.1', 'isAutoConnect': false}
     }));
+    return new Promise<void>((F) => {
+      this.fulfillStart = F;
+    });
+  }
+
+  // REUSES CURRENT PIPE, IF ONE EXISTS
+  async stop() {
+    const pipe = this.pipe || await this.getConnection();
+    pipe.write(JSON.stringify({action: RoutingServiceAction.RESET_ROUTING, parameters: {}}));
+    return new Promise<void>((F) => {
+      this.fulfillStop = F;
+    });
   }
 }
-
-// // Restores the default system routes.
-// resetRouting(): Promise<string> {
-//   try {
-//     if (this.ipcConnection) {
-//       this.ipcConnection.removeAllListeners();
-//     }
-//   } catch (e) {
-//     // Ignore, the service may have disconnected the pipe.
-//   }
-//   return this.sendRequest({action: RoutingServiceAction.RESET_ROUTING, parameters: {}});
-// }
-// }

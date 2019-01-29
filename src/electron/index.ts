@@ -23,6 +23,7 @@ import * as url from 'url';
 import autoLaunch = require('auto-launch'); // tslint:disable-line
 
 import * as errors from '../www/model/errors';
+import {pathToEmbeddedBinary} from './util';
 
 import {ConnectionStore, SerializableConnection} from './connection_store';
 import * as process_manager from './process_manager';
@@ -100,11 +101,7 @@ function createWindow(connectionAtShutdown?: SerializableConnection) {
     mainWindow!.webContents.send('localizationRequest', Object.keys(localizedStrings));
     interceptShadowsocksLink(process.argv);
     if (connectionAtShutdown) {
-      const serverId = connectionAtShutdown.id;
-      console.info(`Automatically starting connection ${serverId}`);
-      sendConnectionStatus(ConnectionStatus.RECONNECTING, serverId);
-      // TODO: Handle errors, report.
-      startVpn(connectionAtShutdown.config, serverId, true);
+      console.error('auto-start not implemented!');
     }
   });
 
@@ -271,59 +268,13 @@ app.on('activate', () => {
 });
 
 app.on('quit', () => {
-  process_manager.teardownVpn().catch((e) => {
-    console.error(`could not tear down proxy on exit`, e);
-  });
+  console.log('unimplemented: teardown VPN on exit');
 });
 
 promiseIpc.on('is-reachable', (config: cordova.plugins.outline.ServerConfig) => {
-  return process_manager.isServerReachable(config)
-      .then(() => {
-        return true;
-      })
-      .catch((e) => {
-        return false;
-      });
+  // TODO: fix
+  return Promise.resolve(true);
 });
-
-// used by both "regular", user-initiated connect and auto-connect (on startup/boot).
-function startVpn(config: cordova.plugins.outline.ServerConfig, id: string, isAutoConnect = false) {
-  // don't log connection details (PII)
-  console.log('frontend asked us to connect!');
-
-  // connect to service, via unix pipe
-  // NOTE: on windows, nobody else can connect to the pipe until the client
-  //       disconnects from the pipe - NOT EVEN THE CONNECTED CLIENT
-  // TODO: does this mean if the client crashes while you're connected, the new
-  //       instance of the client CANNOT connect to the pipe?
-  routing.RoutingService
-      .create(
-          () => {
-            // TODO: reconnect?
-            // TODO: when does the service close the pipe? is it different on windows vs. linux?
-            // TODO: should we just abort when the pipe closes?
-            console.log('pipe to service closed!');
-          },
-          (type) => {
-            console.log(`service message: ${type}`);
-            // TODO: start shadowsocks, etc. when this happens?
-            if (type === routing.RoutingServiceAction.CONFIGURE_ROUTING) {
-              console.log(`connected! disconnecting...`);
-              // TODO: uh damn
-              // r.stop();
-            }
-          })
-      .then(
-          (r) => {
-            // TODO: how to keep a reference to this for when/if disconnect is called?
-            console.log('connected to service');
-            r.start();
-          },
-          (e) => {
-            // TODO: start/install the service?
-            console.error('could not connect to pipe');
-          });
-}
 
 function sendConnectionStatus(status: ConnectionStatus, connectionId: string) {
   let statusString;
@@ -349,15 +300,64 @@ function sendConnectionStatus(status: ConnectionStatus, connectionId: string) {
   }
 }
 
-// TODO: does this have to be a promise? could we do events instead?
+const PROXY_IP = '127.0.0.1';
+const SS_LOCAL_PORT = 1081;
+
+class ProcessMediator {
+  private r = new routing.RoutingService();
+  private p =
+      new process_manager.SingletonProcess(pathToEmbeddedBinary('shadowsocks-libev', 'ss-local'));
+
+  // ugh horrible
+  private currentId: string|undefined;
+
+  async start(config: cordova.plugins.outline.ServerConfig, id: string) {
+    console.log('mediator: starting processes...');
+    this.currentId = id;
+    await this.r.start();
+    this.p.setStatusListener(this.failure.bind(this));
+    this.startProxy(config);
+  }
+
+  private startProxy(config: cordova.plugins.outline.ServerConfig) {
+    // ss-local -s x.x.x.x -p 65336 -k mypassword -m aes-128-cfb -l 1081 -u
+    const args = ['-l', SS_LOCAL_PORT.toString()];
+    args.push('-s', config.host || '');
+    args.push('-p', '' + config.port);
+    args.push('-k', config.password || '');
+    args.push('-m', config.method || '');
+    args.push('-t', '5');
+    args.push('-u');
+
+    this.p.start(args);
+  }
+
+  private failure() {
+    console.error('mediator: something failed');
+    this.stop();
+  }
+
+  async stop() {
+    console.log('mediator: stopping processes...');
+    this.p.setStatusListener(undefined);
+    await this.r.stop();
+    this.p.stop();
+
+    if (this.currentId) {
+      sendConnectionStatus(ConnectionStatus.DISCONNECTED, this.currentId);
+    }
+  }
+}
+
+const mediator = new ProcessMediator();
+
 promiseIpc.on(
     'start-proxying', (args: {config: cordova.plugins.outline.ServerConfig, id: string}) => {
-      startVpn(args.config, args.id);
-      throw errors.ErrorCode.SHADOWSOCKS_START_FAILURE;
+      return mediator.start(args.config, args.id);
     });
 
 promiseIpc.on('stop-proxying', () => {
-  return process_manager.teardownVpn();
+  return mediator.stop();
 });
 
 // This event fires whenever the app's window receives focus.
