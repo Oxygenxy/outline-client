@@ -20,14 +20,15 @@ import * as os from 'os';
 import * as path from 'path';
 import * as process from 'process';
 import * as url from 'url';
+
+import {Mediator} from './mediator';
+
 import autoLaunch = require('auto-launch'); // tslint:disable-line
 
-import * as errors from '../www/model/errors';
-import {pathToEmbeddedBinary} from './util';
-
 import {ConnectionStore, SerializableConnection} from './connection_store';
-import * as process_manager from './process_manager';
-import * as routing from './routing';
+
+// TODO: good golly don't remove me
+import * as errors from '../www/model/errors';
 
 // Used for the auto-connect feature. There will be a connection in store
 // if the user was connected at shutdown.
@@ -58,6 +59,8 @@ const trayIconImages = {
 const enum Options {
   AUTOSTART = '--autostart'
 }
+
+const mediator = new Mediator();
 
 function createWindow(connectionAtShutdown?: SerializableConnection) {
   // Create the browser window.
@@ -276,7 +279,7 @@ promiseIpc.on('is-reachable', (config: cordova.plugins.outline.ServerConfig) => 
   return Promise.resolve(true);
 });
 
-function sendConnectionStatus(status: ConnectionStatus, connectionId: string) {
+mediator.setListener((status: ConnectionStatus, connectionId: string) => {
   let statusString;
   switch (status) {
     case ConnectionStatus.CONNECTED:
@@ -298,95 +301,7 @@ function sendConnectionStatus(status: ConnectionStatus, connectionId: string) {
   } else {
     console.warn(`received ${event} event but no mainWindow to notify`);
   }
-}
-
-const TUN2SOCKS_TAP_DEVICE_NAME = isLinux ? 'outline-tun0' : 'outline-tap0';
-const TUN2SOCKS_TAP_DEVICE_IP = '10.0.85.2';
-const TUN2SOCKS_VIRTUAL_ROUTER_IP = '10.0.85.1';
-const TUN2SOCKS_TAP_DEVICE_NETWORK = '10.0.85.0';
-const TUN2SOCKS_VIRTUAL_ROUTER_NETMASK = '255.255.255.0';
-
-const PROXY_IP = '127.0.0.1';
-const SS_LOCAL_PORT = 1081;
-
-class ProcessMediator {
-  private r = new routing.RoutingService();
-  private p =
-      new process_manager.SingletonProcess(pathToEmbeddedBinary('shadowsocks-libev', 'ss-local'));
-  private t =
-      new process_manager.SingletonProcess(pathToEmbeddedBinary('badvpn', 'badvpn-tun2socks'));
-
-  // ugh horrible
-  private currentId: string|undefined;
-
-  async start(config: cordova.plugins.outline.ServerConfig, id: string) {
-    console.log('mediator: starting processes...');
-    this.currentId = id;
-    await this.r.start(config.host || '');
-    this.p.setStatusListener(this.failure.bind(this));
-    this.t.setStatusListener(this.failure.bind(this));
-    this.startTun2socks();
-    this.startProxy(config);
-  }
-
-  private startTun2socks() {
-    // ./badvpn-tun2socks.exe \
-    //   --tundev "tap0901:outline-tap0:10.0.85.2:10.0.85.0:255.255.255.0" \
-    //   --netif-ipaddr 10.0.85.1 --netif-netmask 255.255.255.0 \
-    //   --socks-server-addr 127.0.0.1:1081 \
-    //   --socks5-udp --udp-relay-addr 127.0.0.1:1081 \
-    //   --transparent-dns
-    const args: string[] = [];
-    args.push(
-        '--tundev',
-        isLinux ? TUN2SOCKS_TAP_DEVICE_NAME :
-                  `tap0901:${TUN2SOCKS_TAP_DEVICE_NAME}:${TUN2SOCKS_TAP_DEVICE_IP}:${
-                      TUN2SOCKS_TAP_DEVICE_NETWORK}:${TUN2SOCKS_VIRTUAL_ROUTER_NETMASK}`);
-    args.push('--netif-ipaddr', TUN2SOCKS_VIRTUAL_ROUTER_IP);
-    args.push('--netif-netmask', TUN2SOCKS_VIRTUAL_ROUTER_NETMASK);
-    args.push('--socks-server-addr', `${PROXY_IP}:${SS_LOCAL_PORT}`);
-    args.push('--loglevel', 'error');
-    args.push('--transparent-dns');
-    // TODO: make conditional
-    args.push('--socks5-udp');
-    args.push('--udp-relay-addr', `${PROXY_IP}:${SS_LOCAL_PORT}`);
-
-    this.t.start(args);
-  }
-
-  private startProxy(config: cordova.plugins.outline.ServerConfig) {
-    // ss-local -s x.x.x.x -p 65336 -k mypassword -m aes-128-cfb -l 1081 -u
-    const args = ['-l', SS_LOCAL_PORT.toString()];
-    args.push('-s', config.host || '');
-    args.push('-p', '' + config.port);
-    args.push('-k', config.password || '');
-    args.push('-m', config.method || '');
-    args.push('-t', '5');
-    args.push('-u');
-
-    this.p.start(args);
-  }
-
-  private failure() {
-    console.error('mediator: something failed');
-    this.stop();
-  }
-
-  async stop() {
-    console.log('mediator: stopping processes...');
-    this.p.setStatusListener(undefined);
-    this.t.setStatusListener(undefined);
-    await this.r.stop();
-    this.p.stop();
-    this.t.stop();
-
-    if (this.currentId) {
-      sendConnectionStatus(ConnectionStatus.DISCONNECTED, this.currentId);
-    }
-  }
-}
-
-const mediator = new ProcessMediator();
+});
 
 promiseIpc.on(
     'start-proxying', (args: {config: cordova.plugins.outline.ServerConfig, id: string}) => {

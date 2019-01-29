@@ -109,8 +109,11 @@ export class RoutingService {
   private fulfillStart?: () => void;
   private fulfillStop?: () => void;
 
-  // ALWAYS USES A BRAND NEW PIPE
   async start(host: string) {
+    // TODO: always use a brand new pipe - is it safe to just stop?
+    if (this.pipe) {
+      await this.stop();
+    }
     const pipe = await this.getConnection();
     pipe.write(JSON.stringify({
       action: RoutingServiceAction.CONFIGURE_ROUTING,
@@ -121,9 +124,8 @@ export class RoutingService {
     });
   }
 
-  // REUSES CURRENT PIPE, IF ONE EXISTS
   async stop() {
-    const pipe = this.pipe || await this.getConnection();
+    const pipe = await this.getConnection();
     pipe.write(JSON.stringify({action: RoutingServiceAction.RESET_ROUTING, parameters: {}}));
     return new Promise<void>((F) => {
       this.fulfillStop = F;
