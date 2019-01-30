@@ -20,8 +20,8 @@ import * as socks from 'socks';
 import * as util from '../www/app/util';
 import * as errors from '../www/model/errors';
 
-import {SsLocal, Tun2socks} from './processes';
-import {RoutingService} from './routing';
+import {HelperProcess, SsLocal, Tun2socks} from './processes';
+import {RoutingService, StandardRoutingService} from './routing';
 
 const PROXY_ADDRESS = '127.0.0.1';
 const PROXY_PORT = 1081;
@@ -48,19 +48,26 @@ const DNS_REQUEST = Buffer.from([
   0, 1                              // QCLASS, set to 1 = IN (Internet)
 ]);
 
+export function standardConnectionMediator(): ConnectionMediator {
+  return new ConnectionMediator(
+      new StandardRoutingService(), new SsLocal(PROXY_PORT),
+      new Tun2socks(PROXY_ADDRESS, PROXY_PORT));
+}
+
 // Coordinates routing and helper processes to establish a full-system VPN.
 // Follows the Mediator pattern.
 //
 // TODO: test for UDP support
 // TODO: restart tun2socks when UDP support changes
 export class ConnectionMediator {
-  private routing = new RoutingService();
-  private ssLocal = new SsLocal(PROXY_PORT);
-  private tun2socks = new Tun2socks(PROXY_ADDRESS, PROXY_PORT);
+  // public for tests - other clients should use the constructor function!
+  constructor(
+      private readonly routing: RoutingService, private readonly ssLocal: HelperProcess,
+      private readonly tun2socks: HelperProcess) {}
 
   private listener?: (status: ConnectionStatus) => void;
 
-  setListener(listener: (status: ConnectionStatus) => void) {
+  setListener(listener?: (status: ConnectionStatus) => void) {
     this.listener = listener;
   }
 
@@ -79,8 +86,8 @@ export class ConnectionMediator {
     this.setHelperListeners(this.onExitOrFailure.bind(this));
 
     await this.routing.start(config.host || '');
-    this.tun2socks.start();
-    this.ssLocal.start(config);
+    this.tun2socks.go(config);
+    this.ssLocal.go(config);
   }
 
   private onExitOrFailure() {

@@ -57,7 +57,7 @@ const enum Options {
   AUTOSTART = '--autostart'
 }
 
-const connectionMediator = new connectivity.ConnectionMediator();
+const connectionMediator = connectivity.standardConnectionMediator();
 connectionMediator.setListener(sendConnectionStatus);
 
 let currentConnectionId: string|undefined;

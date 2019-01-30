@@ -42,6 +42,12 @@ enum RoutingServiceStatusCode {
 const SERVICE_ADDRESS =
     platform() === 'win32' ? '\\\\.\\pipe\\OutlineServicePipe' : '/var/run/outline_controller';
 
+export interface RoutingService {
+  setDisconnectionListener(newListener?: () => void): void;
+  start(proxyAddress: string): Promise<void>;
+  stop(): Promise<void>;
+}
+
 // Communicates with the Outline routing daemon via a Unix socket.
 //
 // Works on both Windows and Linux.
@@ -54,7 +60,7 @@ const SERVICE_ADDRESS =
 // always closed after receiving a RESET_ROUTING response.
 //
 // TODO: network change notifications
-export class RoutingService {
+export class StandardRoutingService implements RoutingService {
   private socket?: Socket;
 
   private disconnectionListener?: () => void;

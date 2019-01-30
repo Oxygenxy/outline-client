@@ -25,8 +25,15 @@ const TUN2SOCKS_VIRTUAL_ROUTER_IP = '10.0.85.1';
 const TUN2SOCKS_TAP_DEVICE_NETWORK = '10.0.85.0';
 const TUN2SOCKS_VIRTUAL_ROUTER_NETMASK = '255.255.255.0';
 
-// TODO: rename
-class SingletonProcess {
+export interface HelperProcess {
+  setExitListener(newListener?: () => void): void;
+  // Although not all classes need the config, a common interface greatly facilitates testing.
+  go(config: cordova.plugins.outline.ServerConfig): void;
+  stop(): void;
+}
+
+// Subclasses must implement go().
+class HelperProcessSkeleton {
   private process?: ChildProcess;
 
   constructor(private path: string) {}
@@ -43,7 +50,7 @@ class SingletonProcess {
   //
   // TODO: rename
   // TODO: check if already running?
-  protected startInternal(args: string[]) {
+  protected start(args: string[]) {
     this.process = spawn(this.path, args);
 
     const onExit = () => {
@@ -68,12 +75,12 @@ class SingletonProcess {
   }
 }
 
-export class SsLocal extends SingletonProcess {
+export class SsLocal extends HelperProcessSkeleton implements HelperProcess {
   constructor(private readonly proxyPort: number) {
     super(pathToEmbeddedBinary('shadowsocks-libev', 'ss-local'));
   }
 
-  start(config: cordova.plugins.outline.ServerConfig) {
+  go(config: cordova.plugins.outline.ServerConfig) {
     // ss-local -s x.x.x.x -p 65336 -k mypassword -m aes-128-cfb -l 1081 -u
     const args = ['-l', this.proxyPort.toString()];
     args.push('-s', config.host || '');
@@ -83,17 +90,17 @@ export class SsLocal extends SingletonProcess {
     args.push('-t', '5');
     args.push('-u');
 
-    this.startInternal(args);
+    super.start(args);
   }
 }
 
 // TODO: handle suspend/resume
-export class Tun2socks extends SingletonProcess {
+export class Tun2socks extends HelperProcessSkeleton implements HelperProcess {
   constructor(private proxyAddress: string, private proxyPort: number) {
     super(pathToEmbeddedBinary('badvpn', 'badvpn-tun2socks'));
   }
 
-  start() {
+  go() {
     // ./badvpn-tun2socks.exe \
     //   --tundev "tap0901:outline-tap0:10.0.85.2:10.0.85.0:255.255.255.0" \
     //   --netif-ipaddr 10.0.85.1 --netif-netmask 255.255.255.0 \
@@ -115,6 +122,6 @@ export class Tun2socks extends SingletonProcess {
     args.push('--socks5-udp');
     args.push('--udp-relay-addr', `${this.proxyAddress}:${this.proxyPort}`);
 
-    this.startInternal(args);
+    super.start(args);
   }
 }
